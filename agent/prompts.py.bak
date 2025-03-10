@@ -1,0 +1,108 @@
+from pydantic import BaseModel, Field, model_validator
+
+
+class CTF_OUT(BaseModel):
+    reachable: bool = Field(
+        description="Is there a possible data flow from source to sink?"
+    )
+    flow: str = Field(
+        description="If there is no feasible data flow, fill in the empty string. If there is a feasible data flow, fill in the specific flow process, in the form of `$1->$2->$3->.....->$n`, where `$1` is the source, `$n` is the sink, and `$k` represents the variables or function calls passed in the middle."
+    )
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.reachable and self.flow == "":
+            raise ValueError("flow is not filled in when reachable is True")
+        return self
+
+
+template4CTF = """
+You need to trace the data flow within a function. I will provide you with a series of parameters and a sink (which is a function call). You need to determine whether the content of the specified parameters flows into the target function call when it is invoked.
+
+note: You only need to determine if the data flow is potentially possible, without worrying about whether there are filtering functions, security checks, or branch conditions in between. You just need to judge whether it is possible to establish a data flow from source to sink under any possible circumstances.
+
+
+### function content ###
+The specific content of the function.
+```java
+{function_content}
+```
+
+###  source arg  ###
+the source args to be traced.
+```
+{source_arg}
+```
+###  sink func-calling  ###
+the sink function call.
+
+{sink_call}
+
+### OUTPUT FORMAT ###
+{format_instructions}
+"""
+
+
+class CB1_OUT(BaseModel):
+    need_check: bool = Field(
+        description="If there are no branch conditions worth analyzing in the provided tainted flow, fill in 'false'; otherwise, fill in 'true'."
+    )
+    tasks: list[str] = Field(
+        description='If there are branch conditions worth analyzing, output the steps required to complete the task as per my request. The format should be ["Task1: xxxxxxx","Task2: xxxxxxx.",........,"Taskn: xxxxxxx"]'
+    )
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.need_check and (
+            len(self.tasks) == 0 or not isinstance(self.tasks, list)
+        ):
+            raise ValueError("tasks is not filled in when need_check is True")
+        return self
+
+
+template4CB1 = """
+You are a code auditing expert who needs to audit the branch statements (such as if and switch) in the given tainted data propagation path to determine whether the malicious data flow can correctly reach the endpoint and bypass any potential security checks. You only need to audit the conditional checks of the branch statements, without considering any other filtering functions along the paths for now. You should first examine the entire function and the tainted flow I provided, analyze the steps required to complete the task, and then outline the procedures needed to accomplish this task. Your tasks must format as '### OUTPUT FORMAT ###' specifies.
+
+note1: You should analyze the code semantics and focus on branch conditions that are critical to business logic or utilize incoming parameters. For parts involving global information, such as logs used in branch conditions, you may apply a more lenient judgment.
+
+note2: When assigning tasks, remember to review the tools you have at your disposal and use them in the tasks as appropriate.
+
+note3: If you encounter functions that are not native to Android or are from non-public libraries, you need to analyze the specific content of the functions in the task to determine whether to bypass the check.
+
+### function content ###
+The specific content of the function.
+```java
+{function_content}
+```
+
+###  source arg  ###
+the source args to be traced.
+```
+{source_arg}
+```
+###  sink func-calling  ###
+the sink function call.
+
+{sink_call}
+
+###  tainted flow  ###
+
+{tainted_flow}
+
+### OUTPUT FORMAT ###
+{format_instructions}
+"""
+
+
+class CB2_OUT(BaseModel):
+    reachable: bool = Field(
+        description="whether the tainted data propagation path can successfully pass through the conditional checks of the branch statements?"
+    )
+
+
+template4CB2 = """
+Based on all the information provided above, determine whether the tainted data propagation path can successfully pass through the conditional checks of the branch statements?
+
+### OUTPUT FORMAT ###
+{format_instructions}
+"""

@@ -1,0 +1,6 @@
+# Ignore __pycache__ directories
+**/__pycache__/
+
+venv/
+javaparser-maven-sample/
+sourcecodes/
