@@ -92,31 +92,31 @@ def CheckBranch(state: State):
 
         else:
             parser = PydanticOutputParser(pydantic_object=CB2_OUT)
-            messages = state["messages"]
             prompt = PromptTemplate(
                 template=template4CB2,
                 partial_variables={
                     "format_instructions": parser.get_format_instructions()
                 },
             ).format()
+
+            messages = state["messages"]
             messages.append(HumanMessage(content=prompt))
             response = agent2.invoke(messages)
             output = parser.parse(response.content)
-            func_call_dict = output.func_call_dict
             return {
                 "messages": messages + [response],
-                "next_node": "subCB" if len(func_call_dict) > 0 else "CB",
+                "next_node": "CB",
                 "func_call_dict": output.func_call_dict,
                 "last_node": "CB",
             }
 
     if len(state.get("func_call_dict")) <= 0:
         parser = PydanticOutputParser(pydantic_object=CB3_OUT)
-        messages = state["messages"]
         prompt = PromptTemplate(
             template=template4CB3,
             partial_variables={"format_instructions": parser.get_format_instructions()},
         ).format()
+        messages = state["messages"]
         messages.append(HumanMessage(content=prompt))
         response = agent2.invoke(messages)
         output = parser.parse(response.content)
@@ -131,7 +131,7 @@ def CheckBranch(state: State):
         func_call, args = state["func_call_dict"].popitem()
         # TODO: 利用缓存结果
         return {
-            "messages": messages + [response],
+            "messages": state["messages"],
             "curr_func_call": (func_call, args),
             "next_node": "subCB",
             "last_node": "CB",
@@ -148,7 +148,7 @@ def subCheckBranch(state: State):
         ).format()
         # TODO：缓存检查结果
         messages.append(HumanMessage(content=prompt))
-        response = agent2.invoke(messages)
+        response = agent3.invoke(messages)
         return {
             "messages": messages + [response],
             "last_node": "subCB",
@@ -237,7 +237,7 @@ def route(
 graph_builder.add_edge(START, "CTF")
 graph_builder.add_conditional_edges("CTF", route, {"CB": "CB", END: END})
 graph_builder.add_conditional_edges(
-    "CB", route, {"CF": END, "subCB": "subCB", END: END}
+    "CB", route, {"CF": END, "subCB": "subCB", END: END, "CB": "CB"}
 )  # test for CB
 graph_builder.add_conditional_edges(
     "subCB", route, {"CB": "CB", "subCB": "subCB", "Tools": "Tools"}

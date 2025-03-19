@@ -90,6 +90,8 @@ class CB2_OUT(BaseModel):
 template4CB2 = """
 To determine whether the decision statements in conditional branches will perform security checks on our parameters, we first need to audit the decision logic within the conditional statements. If there are any function calls that might be used for security checks, we need to understand the details of these functions and whether their parameters are controllable (i.e., whether there is a data flow from the source to the parameters). Therefore, please provide the names of the security-checking functions present in the conditional statements and the names of the parameters that can be controlled.
 
+Note: Your output must format as following
+
 ### OUTPUT FORMAT ###
 {format_instructions}
 """
@@ -103,6 +105,10 @@ class CB3_OUT(BaseModel):
 
 template4CB3 = """
 Based on all the information provided above, determine whether the tainted data propagation path can successfully pass through the conditional checks of the branch statements?
+
+Note: You need to consider whether each inspection function can be bypassed and their logical connections. For instance, if the inspection statement is a() || b() where a can be bypassed but b cannot, then the statement can still be passed.
+
+Note: Your output must format as following.
 
 ### OUTPUT FORMAT ###
 {format_instructions}
@@ -125,6 +131,8 @@ class subCB2_OUT(BaseModel):
 
 template4subCB2 = """
 If you determine that a security check exists, please reflect on whether it can be bypassed using current security techniques. Enter the result into the bypass field of the output. If no security check exists, the default value of bypass should be false.
+
+Note: Your output must format as '### OUTPUT FORMAT ###' specifies.
 
 ### OUTPUT FORMAT ###
 {format_instructions}
