@@ -1,4 +1,6 @@
+from typing import Union
 from pydantic import BaseModel, Field, model_validator
+from my_types import Response
 
 
 class CTF_OUT(BaseModel):
@@ -76,7 +78,7 @@ the sink function call.
 
 class CB2_OUT(BaseModel):
     func_call_dict: dict = Field(
-        description="The list of function calls and it's controllable parameter names in the conditional statements. etc {'func1': ['param name1', 'param name2'], 'func2': ['param name3']}. If there are no function calls in the conditional statements, fill in an empty dictionary."
+        description="The list of function calls and it's controllable parameter names in the conditional statements. etc {'xxx.xxx.xxx.xxx#func1': ['param name1', 'param name2'], 'xxx.xxx.xxx.xxx#func2': ['param name3']}. If there are no function calls in the conditional statements, fill in an empty dictionary."
     )
 
 
@@ -101,28 +103,59 @@ Note: You need to consider whether each inspection function can be bypassed and 
 
 
 class subCB1_OUT(BaseModel):
-    tasks: list[str] = Field(description="")
-
-    bypass: bool = Field(
-        description="Whether the security check can be bypassed. fill in false if security check does not exist."
+    tasks: list[str] = Field(
+        description="different steps to follow, should be in sorted order"
     )
 
 
 template4subCB1 = """
-Next, please autonomously audit step by step whether function {function_name} will perform a security check on the parameters we pass in, under the condition that parameters {parameters_name} is controllable. You need to use a tool to obtain the specific content of the function and independently deduce the security review elements within it. During this process, you can interact with the environment to retrieve more information about the function, enabling you to make a well-founded judgment.
+As a security audit expert, you are now tasked with auditing a potential security-check function during a taint analysis process. Given that the parameter {parameters_name} can be controlled by an attacker, you need to autonomously and step-by-step review whether the function {function_name} performs a security check on the parameters we pass in. You may use tools to retrieve the specific content of other functions called within this function and comprehensively examine the security-check elements contained therein. If this function does perform a security check, you also need to carefully evaluate whether it can be bypassed, with some examples of bypassable cases shown below. Finally, you are required to mimic a human's approach and provide your plan step-by-step. This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. 
+The result of the final step should be the final answer. Make sure that each step has all the information needed - do not skip steps.
+
+
+### bypassable cases ###
+
+- The passed parameter is a path, and the function checks its beginning using methods like startswith, but it does not account for the possibility of bypassing with '..'.
+- The passed parameter is a path, and the function adds a prefix path to it; however, it does not account for the possibility of bypassing with '..'.
+- The passed parameter is a URL, and the function checks whether it contains a specific domain name, such as requiring it to include 'abc.com'. However, it does not account for the possibility of a format like 'abc.com.hack.vip'.
+
+
+### function content ###
+The specific content of the function.
+```java
+{function_content}
+```
+
+
 """
 
 
 class subCB2_OUT(BaseModel):
-    security_check: bool = Field(
-        description="Whether there is a security check in the function."
-    )
-    bypass: bool = Field(
-        description="Whether the security check can be bypassed. fill in false if security check does not exist."
+    action: Union[Response, subCB1_OUT] = Field(
+        description="Action to perform. If you want to respond to user, use Response. "
+        "If you need to further use tools to get the answer, use Plan."
     )
 
 
 template4subCB2 = """
-If you determine that a security check exists, please reflect on whether it can be bypassed using current security techniques. Enter the result into the bypass field of the output. If no security check exists, the default value of bypass should be false.
+
+For the given objective, come up with a simple step by step plan. \
+This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. \
+The result of the final step should be the final answer. Make sure that each step has all the information needed - do not skip steps.
+
+Your objective was this:
+
+```text'
+As a security audit expert, you are now tasked with auditing a potential security-check function during a taint analysis process. Given that the parameter {parameters_name} can be controlled by an attacker, you need to autonomously and step-by-step review whether the function {function_name} performs a security check on the parameters we pass in. You may use tools to retrieve the specific content of other functions called within this function and comprehensively examine the security-check elements contained therein. If this function does perform a security check, you also need to carefully evaluate whether it can be bypassed, with some examples of bypassable cases shown below. Finally, you are required to mimic a human's approach and provide your plan step-by-step. This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. 
+The result of the final step should be the final answer. Make sure that each step has all the information needed - do not skip steps.
+```
+
+Your original plan was this:
+{tasks}
+
+You have currently done the follow steps:
+{past_steps}
+
+Update your plan accordingly. If no more steps are needed and you can return to the user, then respond with that. Otherwise, fill out the plan. Only add steps to the plan that still NEED to be done. Do not return previously done steps as part of the plan.
 
 """

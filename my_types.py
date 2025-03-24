@@ -1,7 +1,17 @@
-from pydantic import BaseModel
-from typing import Annotated
+from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 from langgraph.graph.message import add_messages
+from typing import Annotated, List, Tuple
+import operator
+
+
+class Response(BaseModel):
+    security_check: bool = Field(
+        description="Whether there is a security check in the function."
+    )
+    bypass: bool = Field(
+        description="Whether the security check can be bypassed. fill in false if security check does not exist."
+    )
 
 
 class State(TypedDict):
@@ -14,8 +24,10 @@ class State(TypedDict):
     next_node: str | None
     last_node: str | None
     func_call_dict: dict
-    plans: list[str] | None
     curr_func_call: tuple[str, list[str]] | None
+    tasks: list[str] | None
+    past_steps: Annotated[List[Tuple], operator.add]
+    func_call_result: Annotated[List[Response], operator.add]
 
 
 class FuncArg(BaseModel):
