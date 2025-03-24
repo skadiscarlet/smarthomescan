@@ -14,6 +14,7 @@ class State(TypedDict):
     next_node: str | None
     last_node: str | None
     func_call_dict: dict
+    plans: list[str] | None
     curr_func_call: tuple[str, list[str]] | None
 
 

@@ -6,6 +6,7 @@ from langchain_core.messages import ToolMessage, AIMessage, HumanMessage
 from langchain_deepseek import ChatDeepSeek
 from langchain_openai import ChatOpenAI
 from tools.get_function import GetFuncTool
+from langgraph.prebuilt import create_react_agent
 from agent.prompts import (
     CTF_OUT,
     template4CTF,
@@ -15,6 +16,7 @@ from agent.prompts import (
     template4CB2,
     CB3_OUT,
     template4CB3,
+    subCB1_OUT,
     template4subCB1,
     subCB2_OUT,
     template4subCB2,
@@ -23,38 +25,30 @@ from langchain.output_parsers import PydanticOutputParser
 from langchain.prompts import PromptTemplate, StringPromptTemplate
 from my_types import State
 
-# os.environ["OPENAI_API_KEY"] = api_key
-# os.environ["DEEPSEEK_API_KEY"] = api_key
-# os.environ["DEEPSEEK_API_BASE"] = base_url
-# agent1 = ChatOpenAI(api_key=api_key1, model="gpt-4o", base_url=base_url1)
-agent1 = ChatOpenAI(api_key=api_key, model="qwen-plus", base_url=base_url)
-agent2 = ChatOpenAI(api_key=api_key, model="qwen-plus", base_url=base_url)
-agent3 = ChatOpenAI(api_key=api_key, model="qwen-max", base_url=base_url)
+
+llm1 = ChatOpenAI(api_key=api_key1, model="gpt-4o-2024-08-06", base_url=base_url1)
+llm2 = ChatOpenAI(api_key=api_key1, model="o3-mini", base_url=base_url1)
+llm3 = ChatOpenAI(api_key=api_key1, model="o3-mini", base_url=base_url1)
 
 
 tool = GetFuncTool(target="mihome")
 tools = [tool]
-agent1 = agent1.bind_tools(tools)
-agent3 = agent3.bind_tools(tools)
+analyzer = llm1
+planner = llm2.bind_tools(tools)
+executor = create_react_agent(llm3, [GetFuncTool(target="mihome")], prompt="")
 
 
 def CheckTaintFlow(state: State):
-    parser = PydanticOutputParser(pydantic_object=CTF_OUT)
-    prompt = PromptTemplate(
-        template=template4CTF,
-        input_variables=["function_content", "source_arg", "sink_call"],
-        partial_variables={"format_instructions": parser.get_format_instructions()},
-    ).format(
+    prompt = template4CTF.format(
         function_content=state["function_content"],
         source_arg=state["source_arg"],
         sink_call=state["sink_call"],
     )
     messages = [HumanMessage(content=prompt)]
-    response = agent2.invoke(messages)
-    output = parser.parse(response.content)
-
+    output = analyzer.with_structured_output(CTF_OUT, strict=True).invoke(messages)
+    print(output)
     return {
-        "messages": messages + [response],
+        # "messages": messages + [output],
         "reachable": output.reachable,
         "flow": output.flow,
         "next_node": "CB" if output.reachable else END,
@@ -64,91 +58,58 @@ def CheckTaintFlow(state: State):
 
 def CheckBranch(state: State):
     if state.get("last_node") == "CTF":
-        parser = PydanticOutputParser(pydantic_object=CB1_OUT)
-        prompt = PromptTemplate(
-            template=template4CB1,
-            input_variables=[
-                "function_content",
-                "source_arg",
-                "sink_call",
-                "tainted_flow",
-            ],
-            partial_variables={"format_instructions": parser.get_format_instructions()},
-        ).format(
+        prompt = template4CB1.format(
             function_content=state["function_content"],
             source_arg=state["source_arg"],
             sink_call=state["sink_call"],
             tainted_flow=state["flow"],
         )
         messages = [HumanMessage(content=prompt)]
-        response = agent3.invoke(messages)
-        output = parser.parse(response.content)
+        output = analyzer.with_structured_output(CB1_OUT).invoke(messages)
         if not output.need_check:
             return {
-                "messages": messages + [response],
                 "next_node": "CF",
                 "last_node": "CB",
             }
 
         else:
-            parser = PydanticOutputParser(pydantic_object=CB2_OUT)
-            prompt = PromptTemplate(
-                template=template4CB2,
-                partial_variables={
-                    "format_instructions": parser.get_format_instructions()
-                },
-            ).format()
-
-            messages = state["messages"]
-            messages.append(HumanMessage(content=prompt))
-            response = agent2.invoke(messages)
-            output = parser.parse(response.content)
+            prompt = template4CB2.format()
+            messages = [HumanMessage(content=prompt)]
+            output = planner.with_structured_output(CB2_OUT).invoke(messages)
             return {
-                "messages": messages + [response],
                 "next_node": "CB",
                 "func_call_dict": output.func_call_dict,
                 "last_node": "CB",
             }
 
     if len(state.get("func_call_dict")) <= 0:
-        parser = PydanticOutputParser(pydantic_object=CB3_OUT)
-        prompt = PromptTemplate(
-            template=template4CB3,
-            partial_variables={"format_instructions": parser.get_format_instructions()},
-        ).format()
-        messages = state["messages"]
-        messages.append(HumanMessage(content=prompt))
-        response = agent2.invoke(messages)
-        output = parser.parse(response.content)
+        prompt = template4CB3.format()
+        prompt = template4CB2.format()
+        messages = [HumanMessage(content=prompt)]
+        output = analyzer.with_structured_output(CB3_OUT).invoke(messages)
 
         return {
-            "messages": messages + [response],
             "reachable": output.reachable,
             "next_node": "CF" if output.reachable else END,
             "last_node": "CB",
         }
     else:
         func_call, args = state["func_call_dict"].popitem()
-        # TODO: 利用缓存结果
+
         return {
-            "messages": state["messages"],
             "curr_func_call": (func_call, args),
             "next_node": "subCB",
             "last_node": "CB",
         }
 
 
+# TODO: 为分支检查添加一个ReACT过程，这里需要添加计划和整合，还需要一个子图来处理ReACT的过程
 def subCheckBranch(state: State):
     if state.get("last_node") == "subCB":
-        parser = PydanticOutputParser(pydantic_object=subCB2_OUT)
-        messages = state["messages"]
-        prompt = PromptTemplate(
-            template=template4subCB2,
-            partial_variables={"format_instructions": parser.get_format_instructions()},
-        ).format()
+        prompt = template4subCB2.format()
         # TODO：缓存检查结果
-        messages.append(HumanMessage(content=prompt))
-        response = agent3.invoke(messages)
+        messages = [HumanMessage(content=prompt)]
+        response = planner.with_structured_output(subCB2_OUT).invoke(messages)
         return {
             "messages": messages + [response],
             "last_node": "subCB",
@@ -156,20 +117,9 @@ def subCheckBranch(state: State):
         }
 
     if state.get("last_node") == "CB":
-        messages = state["messages"]
-        func_call, args = state["curr_func_call"]
-        prompt = PromptTemplate(
-            template=template4subCB1,
-            input_variables=["function_name", "parameters_name"],
-        ).format(function_name=func_call, parameters_name=", ".join(args))
-        messages.append(HumanMessage(content=prompt))
-        response = agent3.invoke(messages)
-    elif state.get("last_node") == "Tools":
-        messages = state["messages"]
-        messages.append(
-            HumanMessage(content="Tools success. Now, continue to your task")
-        )
-        response = agent3.invoke(messages)
+        prompt = template4subCB1.format()
+        messages = [HumanMessage(content=prompt)]
+        response = planner.with_structured_output(subCB1_OUT).invoke(messages)
     return {
         "messages": messages + [response],
         "last_node": "subCB",
@@ -179,6 +129,7 @@ def subCheckBranch(state: State):
 
 # TODO
 def CheckFilter(state: State):
+
     return {"messages": state["messages"]}
 
 
@@ -235,7 +186,7 @@ def route(
 
 
 graph_builder.add_edge(START, "CTF")
-graph_builder.add_conditional_edges("CTF", route, {"CB": "CB", END: END})
+graph_builder.add_conditional_edges("CTF", route, {"CB": END, END: END})
 graph_builder.add_conditional_edges(
     "CB", route, {"CF": END, "subCB": "subCB", END: END, "CB": "CB"}
 )  # test for CB

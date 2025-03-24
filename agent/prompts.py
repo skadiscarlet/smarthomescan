@@ -17,9 +17,9 @@ class CTF_OUT(BaseModel):
 
 
 template4CTF = """
-You need to trace the data flow within a function. I will provide you with a series of parameters and a sink (which is a function call). You need to determine whether the content of the specified parameters flows into the target function call when it is invoked.
+You need to trace the data flow within a function. I will provide you with a series of parameteers and a sink (which is a function call). You need to determine whether the content of the specified parameters flows into the target function call when it is invoked.
 
-note: You only need to determine if the data flow is potentially possible, without worrying about whether there are filtering functions, security checks, or branch conditions in between. You just need to judge whether it is possible to establish a data flow from source to sink under any possible circumstances.
+note: You only need to determine if the data flow is potentially possible, without worrying about whether there are filtering functions, security checks, or branch conditions in between. You just need to judge whether it is possibl to establish a data flow from source to sink under any possible circumstances.
 
 
 ### function content ###
@@ -37,9 +37,6 @@ the source args to be traced.
 the sink function call.
 
 {sink_call}
-
-### OUTPUT FORMAT ###
-{format_instructions}
 """
 
 
@@ -54,7 +51,6 @@ You are a code auditing expert who needs to audit the branch statements (such as
 
 Now first, you need to locate all branch decision statements in the call chain. If no branch decision statements exist, return need_check as false; otherwise, set need_check to true, and consider what values each logical condition in the decision statement should take to ensure the flow continues through the call chain.
 
-Note: Your output must format as '### OUTPUT FORMAT ###' specifies.
 
 ### function content ###
 The specific content of the function.
@@ -75,9 +71,6 @@ the sink function call.
 ###  tainted flow  ###
 
 {tainted_flow}
-
-### OUTPUT FORMAT ###
-{format_instructions}
 """
 
 
@@ -90,10 +83,6 @@ class CB2_OUT(BaseModel):
 template4CB2 = """
 To determine whether the decision statements in conditional branches will perform security checks on our parameters, we first need to audit the decision logic within the conditional statements. If there are any function calls that might be used for security checks, we need to understand the details of these functions and whether their parameters are controllable (i.e., whether there is a data flow from the source to the parameters). Therefore, please provide the names of the security-checking functions present in the conditional statements and the names of the parameters that can be controlled.
 
-Note: Your output must format as following
-
-### OUTPUT FORMAT ###
-{format_instructions}
 """
 
 
@@ -108,11 +97,15 @@ Based on all the information provided above, determine whether the tainted data 
 
 Note: You need to consider whether each inspection function can be bypassed and their logical connections. For instance, if the inspection statement is a() || b() where a can be bypassed but b cannot, then the statement can still be passed.
 
-Note: Your output must format as following.
-
-### OUTPUT FORMAT ###
-{format_instructions}
 """
+
+
+class subCB1_OUT(BaseModel):
+    tasks: list[str] = Field(description="")
+
+    bypass: bool = Field(
+        description="Whether the security check can be bypassed. fill in false if security check does not exist."
+    )
 
 
 template4subCB1 = """
@@ -132,8 +125,4 @@ class subCB2_OUT(BaseModel):
 template4subCB2 = """
 If you determine that a security check exists, please reflect on whether it can be bypassed using current security techniques. Enter the result into the bypass field of the output. If no security check exists, the default value of bypass should be false.
 
-Note: Your output must format as '### OUTPUT FORMAT ###' specifies.
-
-### OUTPUT FORMAT ###
-{format_instructions}
 """

@@ -4,6 +4,7 @@ import subprocess
 from my_types import FuncCallNode, FuncArg, UnknownError, State
 import re
 from log import log
+from langchain_core.messages import SystemMessage
 
 
 def init_state(func_content, source_arg, sink_func) -> State:
@@ -14,7 +15,11 @@ def init_state(func_content, source_arg, sink_func) -> State:
         State: The initial state with default values.
     """
     return State(
-        messages=[],
+        messages=[
+            SystemMessage(
+                content="You are a cybersecurity code auditing assistant who needs to provide assistance based on tasks specified by the user. If the user's input includes ### OUTPUT FORMAT ###, you must provide the response in the specified format as required by the user."
+            )
+        ],
         reachable=True,
         flow="",
         function_content=func_content,

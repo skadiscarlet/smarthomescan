@@ -1,254 +1,159 @@
-import json
-from config import api_key, base_url, api_key1, base_url1
-import os
-from langgraph.graph import StateGraph, START, END
-from langchain_core.messages import ToolMessage, AIMessage, HumanMessage
-from langchain_deepseek import ChatDeepSeek
+from langchain import hub
 from langchain_openai import ChatOpenAI
+import operator
+from config import api_key, base_url, api_key1, base_url1
+from typing import Annotated, List, Tuple
+from typing_extensions import TypedDict
+from langgraph.prebuilt import create_react_agent
+from pydantic import BaseModel, Field
+from typing import Union
+from typing import Literal
+from langgraph.graph import END
+from langgraph.graph import StateGraph, START
 from tools.get_function import GetFuncTool
-from agent.prompts import (
-    CTF_OUT,
-    template4CTF,
-    CB1_OUT,
-    template4CB1,
-    CB2_OUT,
-    template4CB2,
+from langgraph.prebuilt import ToolNode, tools_condition
+from langchain_core.prompts import ChatPromptTemplate
+
+# Choose the LLM that will drive the agent
+agent1 = ChatOpenAI(api_key=api_key1, base_url=base_url1, model="gpt-4o-latest")
+prompt = "You are a helpful assistant."
+agent_executor = create_react_agent(
+    agent1, [GetFuncTool(target="mihome")], prompt=prompt
 )
-from langchain.output_parsers import PydanticOutputParser
-from langchain.prompts import PromptTemplate, StringPromptTemplate
-from my_types import State
-
-# os.environ["OPENAI_API_KEY"] = api_key
-# os.environ["DEEPSEEK_API_KEY"] = api_key
-# os.environ["DEEPSEEK_API_BASE"] = base_url
-# agent1 = ChatOpenAI(api_key=api_key1, model="gpt-4o", base_url=base_url1)
-agent1 = ChatOpenAI(api_key=api_key, model="qwen-plus", base_url=base_url)
-# agent2 = ChatDeepSeek(model="deepseek-v3")
-agent2 = ChatOpenAI(api_key=api_key, model="qwen-plus", base_url=base_url)
-agent3 = ChatOpenAI(api_key=api_key, model="qwen-max", base_url=base_url)
-
-graph_builder = StateGraph(State)
-tool = GetFuncTool(target="mihome")
-tools = [tool]
-agent1 = agent1.bind_tools(tools)
-agent3 = agent3.bind_tools(tools)
 
 
-def CheckTaintFlow(state: State):
-    parser = PydanticOutputParser(pydantic_object=CTF_OUT)
-    prompt = PromptTemplate(
-        template=template4CTF,
-        input_variables=["function_content", "source_arg", "sink_call"],
-        partial_variables={"format_instructions": parser.get_format_instructions()},
-    ).format(
-        function_content=state["function_content"],
-        source_arg=state["source_arg"],
-        sink_call=state["sink_call"],
+class CheckBranchState(TypedDict):
+    input: str
+    tasks: List[str]
+    past_steps: Annotated[List[Tuple], operator.add]
+    response: str
+    messages: List[str]
+
+
+class Plan(BaseModel):
+    steps: List[str] = Field(
+        description="different steps to follow, should be in sorted order"
     )
-    messages = [HumanMessage(content=prompt)]
-    response = agent2.invoke(messages)
-    output = parser.parse(response.content)
+
+
+planner_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """For the given objective, come up with a simple step by step plan. \
+This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. \
+The result of the final step should be the final answer. Make sure that each step has all the information needed - do not skip steps.""",
+        ),
+        ("placeholder", "{messages}"),
+    ]
+)
+planner = planner_prompt | ChatOpenAI(
+    api_key=api_key1, base_url=base_url1, model="o3-mini", temperature=0
+).with_structured_output(Plan)
+
+
+class Response(BaseModel):
+    """Response to user."""
+
+    response: str
+
+
+class Act(BaseModel):
+    """Action to perform."""
+
+    action: Union[Response, Plan] = Field(
+        description="Action to perform. If you want to respond to user, use Response. "
+        "If you need to further use tools to get the answer, use Plan."
+    )
+
+
+replanner_prompt = ChatPromptTemplate.from_template(
+    """For the given objective, come up with a simple step by step plan. \
+This plan should involve individual tasks, that if executed correctly will yield the correct answer. Do not add any superfluous steps. \
+The result of the final step should be the final answer. Make sure that each step has all the information needed - do not skip steps.
+
+Your objective was this:
+{input}
+
+Your original plan was this:
+{plan}
+
+You have currently done the follow steps:
+{past_steps}
+
+Update your plan accordingly. If no more steps are needed and you can return to the user, then respond with that. Otherwise, fill out the plan. Only add steps to the plan that still NEED to be done. Do not return previously done steps as part of the plan."""
+)
+
+
+replanner = replanner_prompt | ChatOpenAI(
+    model="o3-mini",
+    temperature=0,
+    api_key=api_key1,
+    base_url=base_url1,
+).with_structured_output(Act)
+
+
+async def execute_step(state: CheckBranchState):
+    plan = state["plan"]
+    plan_str = "\n".join(f"{i+1}. {step}" for i, step in enumerate(plan))
+    task = plan[0]
+    task_formatted = f"""For the following plan:
+{plan_str}\n\nYou are tasked with executing step {1}, {task}."""
+    agent_response = await agent_executor.ainvoke(
+        {"messages": [("user", task_formatted)]}
+    )
     return {
-        "messages": messages + [response],
-        "reachable": output.reachable,
-        "flow": output.flow,
-        "last_node": "CTF",
-        "from_tool": False,
+        "past_steps": [(task, agent_response["messages"][-1].content)],
     }
 
 
-def CheckBranch(state: State):
-    if state.get("last_node") == "CTF":
-        parser = PydanticOutputParser(pydantic_object=CB1_OUT)
-        prompt = PromptTemplate(
-            template=template4CB1,
-            input_variables=[
-                "function_content",
-                "source_arg",
-                "sink_call",
-                "tainted_flow",
-            ],
-            partial_variables={"format_instructions": parser.get_format_instructions()},
-        ).format(
-            function_content=state["function_content"],
-            source_arg=state["source_arg"],
-            sink_call=state["sink_call"],
-            tainted_flow=state["flow"],
-        )
-        messages = [HumanMessage(content=prompt)]
-        response = agent3.invoke(messages)
-        output = parser.parse(response.content)
-        return {
-            "messages": messages + [response],
-            "CB_flag": "continue" if output.need_check else "end",
-            "CB_tasks": output.tasks,
-            "last_node": "CB",
-            "from_tool": False,
-        }
-    elif state.get("last_node") == "subCB":
-        parser = PydanticOutputParser(pydantic_object=CB2_OUT)
-        messages = state["messages"]
-        prompt = PromptTemplate(
-            template=template4CB2,
-            partial_variables={"format_instructions": parser.get_format_instructions()},
-        ).format()
-        messages.append(HumanMessage(content=prompt))
-        response = agent2.invoke(messages)
-        output = parser.parse(response.content)
-        return {
-            "messages": messages + [response],
-            "CB_flag": "end",
-            "reachable": output.reachable,
-            "last_node": "CB",
-            "from_tool": False,
-        }
+async def plan_step(state: CheckBranchState):
+    plan = await planner.ainvoke({"messages": [("user", state["input"])]})
+    return {"plan": plan.steps}
 
 
-def subCheckBranch(state: State):
-    if state.get("from_tool"):
-        messages = state["messages"]
-        messages.append(HumanMessage(content="Now, continue to current Task"))
-        response = agent1.invoke(messages)
-
-        return {
-            "messages": messages + [response],
-            "subCB_flag": True if len(state["CB_tasks"]) > 0 else False,
-            "last_node": "subCB",
-            "from_tool": False,
-        }
+async def replan_step(state: CheckBranchState):
+    output = await replanner.ainvoke(state)
+    if isinstance(output.action, Response):
+        return {"response": output.action.response}
     else:
-        task = state["CB_tasks"].pop(0)
-        messages = state["messages"]
-        messages.append(HumanMessage(content=task))
-        response = agent1.invoke(messages)
-        return {
-            "messages": messages + [response],
-            "subCB_flag": True if len(state["CB_tasks"]) > 0 else False,
-            "last_node": "subCB",
-            "from_tool": False,
-        }
+        return {"plan": output.action.steps}
 
 
-# TODO
-def CheckFilter(state: State):
-    return {"messages": state["messages"]}
-
-
-# TODO
-def subCheckFilter(state: State):
-    return {"messages": state["messages"]}
-
-
-class ToolNode:
-    def __init__(self, tools: list) -> None:
-        self.tools_by_name = {tool.name: tool for tool in tools}
-
-    def __call__(self, inputs: dict):
-        if messages := inputs.get("messages", []):
-            message = messages[-1]
-        else:
-            raise ValueError("No message found in input")
-        outputs = []
-        for tool_call in message.tool_calls:
-            tool_result = self.tools_by_name[tool_call["name"]].invoke(
-                tool_call["args"]
-            )
-            outputs.append(
-                ToolMessage(
-                    content=json.dumps(tool_result),
-                    name=tool_call["name"],
-                    tool_call_id=tool_call["id"],
-                )
-            )
-        return {
-            "messages": outputs,
-            "subCB_flag": True,
-            "subCF_flag": True,
-            "from_tool": True,
-        }
-
-
-tool_node = ToolNode(tools=[tool])
-graph_builder.add_node("Tools", tool_node)
-graph_builder.add_node("CTF", CheckTaintFlow)
-graph_builder.add_node("CB", CheckBranch)
-graph_builder.add_node("subCB", subCheckBranch)
-graph_builder.add_node("CF", CheckFilter)
-graph_builder.add_node("subCF", subCheckFilter)
-
-
-def route_CTF2CB(
-    state: State,
-):
-    if not state.get("reachable"):
+def should_end(state: CheckBranchState):
+    if "response" in state and state["response"]:
         return END
     else:
-        return "CB"
+        return "agent"
 
 
-def route_CB2CF(
-    state: State,
-):
-    if not state.get("reachable"):
-        return END
-    if state.get("CB_flag") == "end":
-        return "CF"
-    if len(state["CB_tasks"]) != 0:
-        return "subCB"
+workflow = StateGraph(CheckBranchState)
 
+# Add the plan node
+workflow.add_node("planner", plan_step)
 
-# TODO: 目前的代码本质上是要ai自行确定审查方式
-# 后需要加入更精确和复杂的prompt引导
-def route_subCB(
-    state: State,
-):
-    if messages := state.get("messages", []):
-        ai_message = messages[-1]
-    else:
-        raise ValueError(f"No messages found in input state to tool_edge: {state}")
-    if hasattr(ai_message, "tool_calls") and len(ai_message.tool_calls) > 0:
-        return "Tools"
+# Add the execution step
+workflow.add_node("agent", execute_step)
 
-    if state["subCB_flag"] == True:
-        return "subCB"
-    else:
-        return "CB"
+# Add a replan node
+workflow.add_node("replan", replan_step)
 
+workflow.add_edge(START, "planner")
 
-def route_tools(
-    state: State,
-):
-    if state.get("last_node"):
-        return state.get("last_node")
-    else:
-        return END
+# From plan we go to agent
+workflow.add_edge("planner", "agent")
 
+# From agent, we replan
+workflow.add_edge("agent", "replan")
 
-graph_builder.add_edge(START, "CTF")
-graph_builder.add_conditional_edges("CTF", route_CTF2CB, {"CB": "CB", END: END})
-graph_builder.add_conditional_edges(
-    "CB", route_CB2CF, {"CF": END, "subCB": "subCB", END: END}
-)  # test for CB
-graph_builder.add_conditional_edges(
-    "subCB", route_subCB, {"CB": "CB", "subCB": "subCB", "Tools": "Tools"}
+workflow.add_conditional_edges(
+    "replan",
+    # Next, we pass in the function that will determine which node is called next.
+    should_end,
+    ["agent", END],
 )
-graph_builder.add_conditional_edges(
-    "Tools", route_tools, {"subCB": "subCB", "subCF": "subCF"}
-)
-graph_builder.add_edge("CF", END)
 
-graph = graph_builder.compile()
-
-
-# def stream_graph_updates(user_input: str):
-#     for event in graph.stream({"messages": [("user", user_input)]}):
-#         for value in event.values():
-#             print("Assistant:", value["messages"][-1].content)
-
-if __name__ == "__main__":
-    from IPython.display import Image, display
-
-    try:
-        display(Image(graph.get_graph().draw_mermaid_png()))
-    except Exception:
-        pass
+# Finally, we compile it!
+# This compiles it into a LangChain Runnable,
+# meaning you can use it as you would any other runnable
+app = workflow.compile()
