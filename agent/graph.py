@@ -23,18 +23,16 @@ from agent.prompts import (
 from langchain.output_parsers import PydanticOutputParser
 from langchain.prompts import PromptTemplate, StringPromptTemplate
 from my_types import State, Response
-
+from agent.subgraph_CB import subgraph as subgraph_CB
 
 llm1 = ChatOpenAI(api_key=api_key1, model="gpt-4o-2024-08-06", base_url=base_url1)
 llm2 = ChatOpenAI(api_key=api_key1, model="o3-mini", base_url=base_url1)
-llm3 = ChatOpenAI(api_key=api_key1, model="o3-mini", base_url=base_url1)
 
 
 tool = GetFuncTool(target="mihome")
 tools = [tool]
 analyzer = llm1
 planner = llm2.bind_tools(tools)
-executor = create_react_agent(llm3, [GetFuncTool(target="mihome")], prompt="")
 
 
 def CheckTaintFlow(state: State):
@@ -93,69 +91,25 @@ def CheckBranch(state: State):
         }
     else:
         func_call, args = state["func_call_dict"].popitem()
-
+        output = subgraph_CB.invoke(
+            {
+                "messages": [],
+                "curr_func_call": (func_call, args),
+                "tasks": [],
+                "func_call_results": None,
+                "past_steps": [],
+            }
+        )
         return {
-            "curr_func_call": (func_call, args),
-            "next_node": "subCB",
+            "func_call_results": output.func_call_result,
+            "next_node": "CB",
             "last_node": "CB",
         }
-
-
-# TODO: 为分支检查添加一个ReACT过程，这里需要添加计划和整合，还需要一个子图来处理ReACT的过程
-def subCheckBranch(state: State):
-    # 整合
-    if state.get("last_node") == "reActCB":
-        function_name, args = state["curr_func_call"]
-        prompt = template4subCB2.format(
-            tasks=json.dumps(state["tasks"]),
-            past_steps=json.dumps(state["past_steps"]),
-            parameters_name=", ".join(args),
-            function_name=function_name,
-        )
-        # TODO：缓存检查结果
-        messages = [HumanMessage(content=prompt)]
-        output = planner.with_structured_output(subCB2_OUT).invoke(messages)
-        if isinstance(output.action, Response):
-            return {
-                "func_call_result": output.action.response,
-                "last_node": "subCB",
-                "next_node": "subCB",
-            }
-        else:
-            return {
-                "tasks": output.action.tasks,
-                "last_node": "subCB",
-                "next_node": "reActCB",
-            }
-    # plan
-    if state.get("last_node") == "CB":
-        function_name, args = state["curr_func_call"]
-        prompt = template4subCB1.format(
-            parameters_name=", ".join(args),
-            function_name=function_name,
-            function_content=get_func(function_name, "mihome"),
-        )
-        messages = [HumanMessage(content=prompt)]
-        output = planner.with_structured_output(subCB1_OUT).invoke(messages)
-        return {
-            "tasks": output.tasks,
-            "last_node": "subCB",
-            "next_node": "subCB",
-        }
-
-
-def reactCheckBranch(state: State):
-    pass
 
 
 # TODO
 def CheckFilter(state: State):
 
-    return {"messages": state["messages"]}
-
-
-# TODO
-def subCheckFilter(state: State):
     return {"messages": state["messages"]}
 
 
@@ -185,13 +139,10 @@ def subCheckFilter(state: State):
 
 tool_node = ToolNode(tools=[tool])
 graph_builder = StateGraph(State)
-graph_builder.add_node("Tools", tool_node)
+# graph_builder.add_node("Tools", tool_node)
 graph_builder.add_node("CTF", CheckTaintFlow)
 graph_builder.add_node("CB", CheckBranch)
-graph_builder.add_node("subCB", subCheckBranch)
-graph_builder.add_node("reActCB", reactCheckBranch)
 graph_builder.add_node("CF", CheckFilter)
-graph_builder.add_node("subCF", subCheckFilter)
 
 
 def route(
@@ -209,16 +160,8 @@ def route(
 
 graph_builder.add_edge(START, "CTF")
 graph_builder.add_conditional_edges("CTF", route, {"CB": "CB", END: END})
-graph_builder.add_conditional_edges(
-    "CB", route, {"CF": END, "subCB": "subCB", END: END, "CB": "CB"}
-)  # test for CB
-graph_builder.add_conditional_edges(
-    "subCB", route, {"CB": "CB", "subCB": "subCB", "reActCB": "reActCB"}
-)
+graph_builder.add_conditional_edges("CB", route, {"CF": END, END: END, "CB": "CB"})
 graph_builder.add_edge("reActCB", "subCB")
-graph_builder.add_conditional_edges(
-    "Tools", route, {"subCB": "subCB", "subCF": "subCF"}
-)
 graph_builder.add_edge("CF", END)
 
 graph = graph_builder.compile()

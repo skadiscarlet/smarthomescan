@@ -159,3 +159,8 @@ You have currently done the follow steps:
 Update your plan accordingly. If no more steps are needed and you can return to the user, then respond with that. Otherwise, fill out the plan. Only add steps to the plan that still NEED to be done. Do not return previously done steps as part of the plan.
 
 """
+
+template4subCB3 = """
+For the following plan:
+{plan_str}
+You are tasked with executing step {num}, {task}."""

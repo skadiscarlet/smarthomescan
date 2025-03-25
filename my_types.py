@@ -27,7 +27,15 @@ class State(TypedDict):
     curr_func_call: tuple[str, list[str]] | None
     tasks: list[str] | None
     past_steps: Annotated[List[Tuple], operator.add]
-    func_call_result: Annotated[List[Response], operator.add]
+    func_call_results: Annotated[List[Response], operator.add]
+
+
+class SubState(BaseModel):
+    messages: Annotated[list, add_messages]
+    curr_func_call: tuple[str, list[str]] | None
+    tasks: list[str] | None
+    func_call_result: Response | None
+    past_steps: Annotated[List[Tuple], operator.add]
 
 
 class FuncArg(BaseModel):
